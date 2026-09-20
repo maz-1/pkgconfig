@@ -30,15 +30,113 @@
 #endif
 
 #include <sys/types.h>
-#include <dirent.h>
 #include <string.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
-#include <stdlib.h>
-#include <ctype.h>
+
+#ifdef G_OS_WIN32
+#include <windows.h>
+
+/*
+ * Small native Win32 dirent compatibility layer used only by scan_dir().
+ * Keeping it here avoids shipping an external dirent library or DLL.
+ */
+struct dirent
+{
+  char d_name[MAX_PATH];
+};
+
+typedef struct
+{
+  HANDLE handle;
+  WIN32_FIND_DATAA find_data;
+  gboolean first;
+  struct dirent entry;
+} DIR;
+
+static DIR *
+opendir (const char *dirname)
+{
+  DIR *dir;
+  char *pattern;
+  size_t len;
+
+  if (dirname == NULL)
+    {
+      errno = EINVAL;
+      return NULL;
+    }
+
+  len = strlen (dirname);
+  pattern = (char *) malloc (len + 4);
+  dir = (DIR *) malloc (sizeof (DIR));
+
+  if (pattern == NULL || dir == NULL)
+    {
+      free (pattern);
+      free (dir);
+      errno = ENOMEM;
+      return NULL;
+    }
+
+  strcpy (pattern, dirname);
+  if (len > 0 && dirname[len - 1] != '\\' && dirname[len - 1] != '/')
+    strcat (pattern, "\\");
+  strcat (pattern, "*");
+
+  dir->handle = FindFirstFileA (pattern, &dir->find_data);
+  free (pattern);
+
+  if (dir->handle == INVALID_HANDLE_VALUE)
+    {
+      free (dir);
+      errno = ENOENT;
+      return NULL;
+    }
+
+  dir->first = TRUE;
+  return dir;
+}
+
+static struct dirent *
+readdir (DIR *dir)
+{
+  if (dir == NULL)
+    return NULL;
+
+  if (dir->first)
+    dir->first = FALSE;
+  else if (!FindNextFileA (dir->handle, &dir->find_data))
+    return NULL;
+
+  strncpy (dir->entry.d_name, dir->find_data.cFileName,
+           sizeof (dir->entry.d_name) - 1);
+  dir->entry.d_name[sizeof (dir->entry.d_name) - 1] = '\0';
+  return &dir->entry;
+}
+
+static int
+closedir (DIR *dir)
+{
+  if (dir == NULL)
+    {
+      errno = EINVAL;
+      return -1;
+    }
+
+  FindClose (dir->handle);
+  free (dir);
+  return 0;
+}
+#else
+#include <dirent.h>
+#endif
 
 static void verify_package (Package *pkg);
 

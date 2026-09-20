@@ -1,13 +1,27 @@
-cmake_minimum_required (VERSION 2.8)
-project(pkgconfig)
-set(pkgconfig_VERSION 0.28)
-enable_language(C)
+cmake_minimum_required(VERSION 3.15)
 
-include(CheckIncludeFiles)
-CHECK_INCLUDE_FILES("dirent.h;unistd.h;sys/wait.h;malloc.h" HEADER_PREREQS)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
 
-if(NOT ${HEADER_PREREQS})
-    message(SEND_ERROR "Missing header files: dirent.h unistd.h sys/wait.h malloc.h")
+project(pkgconfig VERSION 0.28 LANGUAGES C)
+set(pkgconfig_VERSION ${PROJECT_VERSION})
+
+# Keep the Windows executable self-contained: link the MSVC runtime statically
+# so pkg-config.exe does not require the redistributable DLLs.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# The original Unix build uses dirent/unistd/wait headers.  The native Windows
+# build uses Win32 directory enumeration in pkg.c and does not need them.
+if(NOT WIN32)
+    include(CheckIncludeFiles)
+    CHECK_INCLUDE_FILES("dirent.h;unistd.h;sys/wait.h;malloc.h" HEADER_PREREQS)
+
+    if(NOT HEADER_PREREQS)
+        message(SEND_ERROR "Missing header files: dirent.h unistd.h sys/wait.h malloc.h")
+    endif()
 endif()
 
 include(GNUInstallDirs)
