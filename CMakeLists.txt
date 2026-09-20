@@ -4,111 +4,99 @@ if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
-project(pkgconfig VERSION 0.28 LANGUAGES C)
-set(pkgconfig_VERSION ${PROJECT_VERSION})
+project(pkgconf VERSION 3.0.7 LANGUAGES C)
 
-# Keep the Windows executable self-contained: link the MSVC runtime statically
-# so pkg-config.exe does not require the redistributable DLLs.
-if(MSVC)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
-# The original Unix build uses dirent/unistd/wait headers.  The native Windows
-# build uses Win32 directory enumeration in pkg.c and does not need them.
 if(NOT WIN32)
-    include(CheckIncludeFiles)
-    CHECK_INCLUDE_FILES("dirent.h;unistd.h;sys/wait.h;malloc.h" HEADER_PREREQS)
-
-    if(NOT HEADER_PREREQS)
-        message(SEND_ERROR "Missing header files: dirent.h unistd.h sys/wait.h malloc.h")
-    endif()
+    message(FATAL_ERROR "This CMake build is for the standalone native Windows executable. Use the upstream Meson build on other platforms.")
 endif()
 
 include(GNUInstallDirs)
 
-macro(define_gnu_var VAR)
-    string(TOLOWER ${VAR} GNU_VAR)
-    set(${GNU_VAR} ${CMAKE_INSTALL_${VAR}})
-endmacro()
-
-define_gnu_var(prefix)
-define_gnu_var(exec_prefix)
-define_gnu_var(includedir)
-define_gnu_var(libdir)
-define_gnu_var(datarootdir)
-define_gnu_var(datadir)
-
-macro(define_var VAR VALUE)
-    set(${VAR} "${VALUE}" CACHE STRING "${VAR}")
-    string(TOLOWER ${VAR} GNU_VAR)
-    set(${GNU_VAR} "${VALUE}")
-    add_definitions(-DPKG_CONFIG_${VAR}="${${VAR}}")
-endmacro()
-
-define_var(PC_PATH "${CMAKE_INSTALL_LIBDIR}/pkgconfig:${CMAKE_INSTALL_DATADIR}/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig")
-define_var(SYSTEM_INCLUDE_PATH "/usr/include")
-define_var(SYSTEM_LIBRARY_PATH "/usr/lib:/lib")
-
-set(PACKAGE_VERSION "${pkgconfig_VERSION}")
-
-add_definitions(-DVERSION="${pkgconfig_VERSION}")
-
-# TODO: Read from deplibs_check_method from `libtool --config`
-set(ENABLE_INDIRECT_DEPS OFF CACHE BOOL "")
-set(use_indirect_deps ${ENABLE_INDIRECT_DEPS})
-if(ENABLE_INDIRECT_DEPS)
-    add_definitions(-DENABLE_INDIRECT_DEPS=1)
-else()
-    add_definitions(-DENABLE_INDIRECT_DEPS=0)
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-add_executable(pkg-config
-    glib-snippet.h
-    glib-snippet.c
-    pkg.h
-    pkg.c
-    parse.h
-    parse.c
-    main.c
+set(PKGCONF_SOURCES
+    libpkgconf/argvsplit.c
+    libpkgconf/audit.c
+    libpkgconf/bsdstubs.c
+    libpkgconf/buffer.c
+    libpkgconf/bufferset.c
+    libpkgconf/bytecode.c
+    libpkgconf/cache.c
+    libpkgconf/client.c
+    libpkgconf/dependency.c
+    libpkgconf/fileio.c
+    libpkgconf/fragment.c
+    libpkgconf/license.c
+    libpkgconf/output.c
+    libpkgconf/parser.c
+    libpkgconf/path.c
+    libpkgconf/personality.c
+    libpkgconf/pkg.c
+    libpkgconf/queue.c
+    libpkgconf/tuple.c
+    libpkgconf/variable.c
+    libpkgconf/version.c
 )
 
-install(TARGETS pkg-config DESTINATION bin)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/libpkgconf")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/config.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/libpkgconf/config.h"
+    @ONLY
+)
 
-include(CTest)
+add_library(libpkgconf STATIC ${PKGCONF_SOURCES})
+target_include_directories(libpkgconf
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}"
+)
+target_compile_definitions(libpkgconf
+    PRIVATE
+        LIBPKGCONF_EXPORT
+        PKGCONFIG_IS_STATIC
+        _CRT_SECURE_NO_WARNINGS
+)
 
-configure_file(check/config.sh.in ${CMAKE_SOURCE_DIR}/check/config.sh)
+set(VERSION "${PROJECT_VERSION}.0")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/pkgconf.manifest.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/pkgconf.manifest"
+    @ONLY
+)
+set(MANIFEST_FILE "${CMAKE_CURRENT_BINARY_DIR}/pkgconf.manifest")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/pkgconf.rc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/pkgconf.rc"
+    @ONLY
+)
 
-add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C ${CMAKE_CFG_INTDIR})
+enable_language(RC)
 
-find_program(TEST_SHELL NAMES bash ksh sh)
+add_executable(pkg-config
+    cli/main.c
+    cli/core.c
+    cli/getopt_long.c
+    cli/renderer-msvc.c
+    "${CMAKE_CURRENT_BINARY_DIR}/pkgconf.rc"
+)
+target_include_directories(pkg-config
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cli"
+)
+target_compile_definitions(pkg-config
+    PRIVATE
+        PKGCONFIG_IS_STATIC
+        _CRT_SECURE_NO_WARNINGS
+)
+target_link_libraries(pkg-config PRIVATE libpkgconf advapi32)
+set_target_properties(pkg-config PROPERTIES
+    OUTPUT_NAME "pkg-config"
+    LINK_FLAGS "/MANIFEST:NO"
+)
 
-macro(check_test TEST_NAME)
-    add_test(NAME check-${TEST_NAME} WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/check COMMAND ${TEST_SHELL} check-${TEST_NAME})
-    set_tests_properties(check-${TEST_NAME} PROPERTIES ENVIRONMENT "srcdir=${CMAKE_SOURCE_DIR}/check;PKG_CONFIG=${CMAKE_BINARY_DIR}/pkg-config")
-endmacro()
-
-check_test(cflags)
-check_test(libs)
-check_test(mixed-flags)
-check_test(non-l-flags)
-check_test(define-variable)
-check_test(libs-private)
-check_test(requires-private)
-check_test(circular-requires)
-check_test(includedir)
-check_test(conflicts)
-check_test(missing)
-check_test(idirafter)
-check_test(sort-order)
-check_test(duplicate-flags)
-check_test(whitespace)
-check_test(cmd-options)
-check_test(version)
-check_test(requires-version)
-check_test(print-options)
-check_test(path)
-check_test(sysroot)
-check_test(uninstalled)
-check_test(debug)
-check_test(gtk)
-check_test(tilde)
+install(TARGETS pkg-config RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
